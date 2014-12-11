@@ -127,7 +127,13 @@ fn ty_local(t: &Ty, krate: CrateNum) -> bool {
 }
 
 fn ok(d: DefId, s: Ty, p: Vec<Ty>) -> bool {
-    PosetOrphanChecker { privileged_self: false }.is_nonorphan(
+    let r = ok_ps(d, s.clone(), p.clone(), false);
+    assert_eq!(r, ok_ps(d, s, p, true));
+    r
+}
+
+fn ok_ps(d: DefId, s: Ty, p: Vec<Ty>, ps: bool) -> bool {
+    PosetOrphanChecker { privileged_self: ps }.is_nonorphan(
         &TraitRef::new(d, s, p), FOO)
 }
 
@@ -154,8 +160,13 @@ fn option_(t: Ty) -> Ty {
 }
 /// Vec<T>
 fn vec_(t: Ty) -> Ty {
-    Generic(CORE_D, vec![t])
+    Generic(COLLECTIONS_D, vec![t])
 }
+/// Foo::Items<T>
+fn foo_items_(t: Ty) -> Ty {
+    Generic(FOO_D, vec![t])
+}
+
 
 #[test]
 fn lone_type_parameter() {
@@ -180,6 +191,23 @@ fn overlapping_pairs() {
     let pair = Generic(CORE_D, vec![option_(Param), option_(foo_p)]);
     assert!(!ok(CORE_D, pair, vec![]));
 
+}
+
+#[test]
+fn overlapping_pairs_self() {
+    /*! `impl<T> Add<Foo> for T` -- Bad
+        `impl<T> Add<T> for Foo` -- Only with privileged_self */
+
+    assert!(!ok(CORE_D, Param, vec![foo_p]));
+    assert!(ok_ps(CORE_D, foo_p, vec![Param], true));
+    assert!(!ok_ps(CORE_D, foo_p, vec![Param], false));
+}
+
+#[test]
+fn iterator_for_items() {
+    /*! `impl<T> Iterator<T> for Items<T>` -- Only with privileged_self */
+    assert!(ok_ps(CORE_D, foo_items_(Param), vec![Param], true));
+    assert!(!ok_ps(CORE_D, foo_items_(Param), vec![Param], false));
 }
 
 #[test]

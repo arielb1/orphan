@@ -1,74 +1,173 @@
-#![feature(globs, slicing_syntax, phase, macro_rules)]
-#![allow(dead_code)]
+#![feature(globs, slicing_syntax, phase, macro_rules, if_let)]
+#![allow(dead_code, non_upper_case_globals)]
 
 #[phase(plugin, link)] extern crate log;
 
-pub use self::Crate::*;
-pub use self::Type::*;
+use Ty::Generic;
+use Ty::Param;
+use Ty::Simple;
 
-#[deriving(PartialEq, Show)]
-enum Type {
-    Concrete(Crate, Vec<Type>),
-    Parameter
+#[deriving(PartialEq, Show, Clone)]
+struct CrateNum(u32);
+
+#[deriving(PartialEq, Show, Clone)]
+struct DefId {
+    krate: CrateNum,
+    // not using the node id
 }
 
-#[deriving(PartialEq, Show)]
-enum Crate {
-    Local,
-    Remote,
+#[deriving(PartialEq, Show, Clone)]
+enum Ty {
+    Generic(DefId, Vec<Ty>),
+    Simple(DefId), /* like generic, empty params */
+    Param,
 }
 
-macro_rules! local(
-    ($($e:expr),*) => ({
-        Concrete(Local, vec!($($e),*))
-    });
-    ($($e:expr),+,) => (local!($($e),+))
-)
-
-macro_rules! remote(
-    ($($e:expr),*) => ({
-        Concrete(Remote, vec!($($e),*))
-    });
-    ($($e:expr),+,) => (remote!($($e),+))
-)
-
-fn not_ok(krate: Crate, types: &[Type]) -> bool {
-    !ok(krate, types)
+#[deriving(Show)]
+struct TraitRef {
+    def: DefId,
+    self_ty: Ty,
+    params: Vec<Ty>
 }
 
-fn ok(krate: Crate, types: &[Type]) -> bool {
-    let result = krate == Local || {
-        types.iter().all(|t| type_ok(t))
-    };
-
-    debug!("ok({},{}) = {}",
-           krate, types, result);
-
-    result
+impl TraitRef {
+    fn new(def: DefId, self_ty: Ty, params: Vec<Ty>) -> TraitRef {
+        TraitRef {
+            def: def,
+            self_ty: self_ty,
+            params: params
+        }
+    }
 }
 
-fn type_ok(ty: &Type) -> bool {
-    let result = match *ty {
-        Concrete(krate, ref types) => ok(krate, types[]),
-        Parameter => false,
-    };
+trait OrphanChecker {
+    fn is_nonorphan(&self, tref: &TraitRef, in_crate: CrateNum) -> bool;
+}
 
-    debug!("type_ok({}) = {}",
-           ty, result);
+struct PosetOrphanChecker {
+    privileged_self: bool
+}
 
-    result
+impl OrphanChecker for PosetOrphanChecker {
+    fn is_nonorphan(&self, tref: &TraitRef, krate: CrateNum) -> bool {
+        // R0
+        if tref.def.krate == krate {
+            debug!("{} is not an orphan by R0", tref);
+            return true;
+        }
+
+        // R1
+        if ty_local(&tref.self_ty, krate) && (
+            self.privileged_self || tref.params.iter().all(
+                |p| ty_complete(p, krate))) {
+            debug!("{} is not an orphan by R1", tref);
+            return true;
+        }
+
+        // R2
+        if ty_complete(&tref.self_ty, krate) &&
+            tref.params.iter().all(|p| ty_complete(p, krate)) &&
+            tref.params.iter().any(|p| ty_local(p, krate)) {
+                debug!("{} is not an orphan by R2", tref);
+            return true;
+        }
+
+        false
+    }
+}
+
+fn ty_free(t: &Ty) -> bool {
+    match *t {
+        Param => false,
+        Simple(_) => true,
+        Generic(_, ref params) => params.iter().all(|t| ty_free(t))
+    }
+}
+
+fn ty_complete(t: &Ty, krate: CrateNum) -> bool {
+    // C0
+    if ty_free(t) {
+        return true;
+    }
+    // C1
+    if ty_local(t, krate) {
+        return true;
+    }
+    false
+}
+
+// This has exponential complexity
+// Can be fixed with a cache
+fn ty_local(t: &Ty, krate: CrateNum) -> bool {
+    match *t {
+        Param => {},
+        Simple(def) => {
+            // T0
+            if def.krate == krate {
+                return true;
+            }
+            // T1 can't apply (no param exists)
+        }
+        Generic(def, ref params) => {
+            // T0
+            if def.krate == krate {
+                debug!(" {} is local by T0", t);
+                return true;
+            }
+            // T1
+            if params.iter().all(|p| ty_complete(p, krate)) &&
+                params.iter().any(|p| ty_local(p, krate)) {
+                    debug!(" {} is local by T1", t);
+                    return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn ok(d: DefId, s: Ty, p: Vec<Ty>) -> bool {
+    PosetOrphanChecker { privileged_self: false }.is_nonorphan(
+        &TraitRef::new(d, s, p), FOO)
+}
+
+const CORE : CrateNum = CrateNum(0);
+const FOO : CrateNum = CrateNum(1);
+const BAR : CrateNum = CrateNum(2);
+const COLLECTIONS: CrateNum = CrateNum(3);
+
+const CORE_D : DefId = DefId { krate: CORE };
+const FOO_D : DefId = DefId { krate: FOO };
+const BAR_D : DefId = DefId { krate: BAR };
+const COLLECTIONS_D: DefId = DefId { krate: COLLECTIONS };
+
+const int_: Ty = Simple(CORE_D);
+/// Primitive Foo
+const foo_p: Ty = Simple(FOO_D);
+/// Foo<T> (1 parameter)
+fn foo_(t: Ty) -> Ty {
+    Generic(FOO_D, vec![t])
+}
+/// Option<T>
+fn option_(t: Ty) -> Ty {
+    Generic(CORE_D, vec![t])
+}
+/// Vec<T>
+fn vec_(t: Ty) -> Ty {
+    Generic(CORE_D, vec![t])
 }
 
 #[test]
 fn lone_type_parameter() {
     /*! `impl<T> Show for T` -- not_ok */
-    assert!(not_ok(Remote, &[Parameter]));
+    assert!(!ok(CORE_D, Param, vec![]));
 }
+
 
 #[test]
 fn type_parameter() {
     /*! `impl<T> Show for Foo<T>` -- OK */
-    assert!(ok(Remote, &[local!(Parameter)]));
+    assert!(ok(CORE_D, foo_(Param), vec![]));
 }
 
 #[test]
@@ -78,47 +177,42 @@ fn overlapping_pairs() {
     // Bad because another crate could do:
     // impl<T> Show for Pair<Option<Bar>, Option<T>>
 
-    assert!(not_ok(Remote,
-                   &[remote!(                  // Pair<
-                       remote!(Parameter),     //   Option<T>,
-                       remote!(local!()))]));  //   Option<Foo> >
+    let pair = Generic(CORE_D, vec![option_(Param), option_(foo_p)]);
+    assert!(!ok(CORE_D, pair, vec![]));
+
 }
 
 #[test]
 fn bigint_int() {
     /*! `impl Add<Foo> for int` -- OK */
 
-    assert!(ok(Remote,
-               &[local!(),
-                 remote!()]));
+    assert!(ok(CORE_D, int_, vec![foo_p]));
 }
 
 #[test]
 fn bigint_param() {
     /*! `impl Add<Foo> for T` -- not OK */
 
-    assert!(not_ok(Remote,
-                   &[local!(),
-                     Parameter]));
+    assert!(!ok(CORE_D, Param, vec![foo_p]));
 }
 
 #[test]
 fn blanket() {
     /*! `impl<T> Foo for T` -- OK */
 
-    assert!(ok(Local, &[Parameter]));
+    assert!(ok(FOO_D, Param, vec![]));
 }
 
 #[test]
 fn vec_local_1() {
     /*! `impl Clone for Vec<Foo>` -- OK */
 
-    assert!(ok(Remote, &[remote!(local!())]));
+    assert!(ok(FOO_D, vec_(foo_p), vec![]));
 }
 
 #[test]
 fn vec_local_2() {
     /*! `impl<T> Clone for Vec<Foo<T>>` -- OK */
 
-    assert!(ok(Remote, &[remote!(local!(Parameter))]));
+    assert!(ok(FOO_D, vec_(foo_(Param)), vec![]));
 }

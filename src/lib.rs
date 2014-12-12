@@ -298,13 +298,6 @@ fn overlapping_pairs_self() {
 }
 
 #[test]
-fn iterator_for_items() {
-    /*! `impl<T> Iterator<T> for Items<T>` -- Only with privileged_self */
-    assert!(ok_ps(CORE_D, foo_items_(Param), vec![Param], true));
-    assert!(!ok_ps(CORE_D, foo_items_(Param), vec![Param], false));
-}
-
-#[test]
 fn bigint_int() {
     /*! `impl Add<Foo> for int` -- OK */
 
@@ -349,4 +342,24 @@ fn bigint_vecint() {
 fn all_remote() {
     /*! `impl Clone for int` -- not OK */
     assert!(!ok(CORE_D, int_, vec![]));
+}
+
+#[test]
+fn iterator_for_items() {
+    /*! `impl<T> Iterator<T> for Items<T>` -- Only with privileged_self */
+    assert!(ok_ps(CORE_D, foo_items_(Param), vec![Param], true));
+    assert!(!ok_ps(CORE_D, foo_items_(Param), vec![Param], false));
+}
+
+#[test]
+fn no_vec_conflict() {
+    /*! We can't have both:
+           impl<T> Iterator<Foo1<T>> for T
+           impl<T,S> Iterator<T> for Foo2<S>
+
+        Because they conflict on <Iterator<Vec1<Vec2<uint>> for Vec2<uint>>.
+        We test for the latter in iterator_for_items.
+     */
+
+    assert!(!ok(CORE_D, Param, vec![foo_(Param)]));
 }

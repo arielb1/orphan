@@ -3,27 +3,53 @@
 
 #[phase(plugin, link)] extern crate log;
 
+use std::fmt;
+
 use Ty::Generic;
 use Ty::Param;
 use Ty::Simple;
 
-#[deriving(PartialEq, Show, Clone)]
+#[deriving(PartialEq, Clone)]
 struct CrateNum(u32);
 
-#[deriving(PartialEq, Show, Clone)]
+impl fmt::Show for CrateNum {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let CrateNum(n) = *self;
+        write!(f, "{}", n)
+    }
+}
+
+#[deriving(PartialEq, Clone)]
 struct DefId {
     krate: CrateNum,
     // not using the node id
 }
 
-#[deriving(PartialEq, Show, Clone)]
+impl fmt::Show for DefId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "[{}]", self.krate)
+    }
+}
+
+#[deriving(PartialEq, Clone)]
 enum Ty {
     Generic(DefId, Vec<Ty>),
     Simple(DefId), /* like generic, empty params */
     Param,
 }
 
-#[deriving(Show)]
+impl fmt::Show for Ty {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Param => write!(f, "T"),
+            Simple(did) => write!(f, "{}", did),
+            Generic(did, ref tys) if tys.is_empty() => write!(f, "{}", did),
+            Generic(did, ref tys) => write!(f, "{}<{:#}>", did, tys)
+        }
+    }
+}
+
+#[deriving(PartialEq, Clone)]
 struct TraitRef {
     def: DefId,
     self_ty: Ty,
@@ -40,10 +66,47 @@ impl TraitRef {
     }
 }
 
+impl fmt::Show for TraitRef {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.params.is_empty() {
+            write!(f, "<{} for {}>", self.def, self.self_ty)
+        } else {
+            write!(f, "<{}<{:#}> for {}>", self.def, self.params,
+                   self.self_ty)
+        }
+    }
+}
+
+/// Orphan Cheker
+///
+/// The orphan checker exists to prevent two separately-compiled
+/// crates having different impls for the same TraitRef.
+///
+/// To state that in other words, if a substituted-TraitRef could
+/// be implemented by 2 crates, then one of them must depend on the
+/// other (so coherence can detect the overlap).
+///
+/// For example, `Path` doesn't currently implement `Show`, so
+/// having an `impl Show for Path` in a new crate wouldn't violate
+/// coherence, but such an impl can't be accepted: if 2 crates
+/// have such an impl, with a different algorithm, it is unobvious
+/// which one should be chosen by a crate that depends on both.
 trait OrphanChecker {
     fn is_nonorphan(&self, tref: &TraitRef, in_crate: CrateNum) -> bool;
 }
 
+/// The order-based orphan checking algorithm.
+///
+/// Classically, orphan checking works by ensuring that the TraitRef
+/// of every impl must contain a definition from the same crate as the impl.
+///
+/// However, this isn't sufficient. A small counterexample is:
+///
+/// crate base: trait Base<A> {}
+/// crate  foo: struct Foo; impl<T> Base<T> for Foo {}
+/// crate  bar: struct Bar; impl<T> Base<Bar> for T {}
+///
+/// and now, both impls are good for <Base<Bar> for Foo>.
 struct PosetOrphanChecker {
     privileged_self: bool
 }
@@ -52,7 +115,7 @@ impl OrphanChecker for PosetOrphanChecker {
     fn is_nonorphan(&self, tref: &TraitRef, krate: CrateNum) -> bool {
         // R0
         if tref.def.krate == krate {
-            debug!("{} is not an orphan by R0", tref);
+            debug!("{} is not a {}-orphan by R0", tref, krate);
             return true;
         }
 
@@ -60,7 +123,7 @@ impl OrphanChecker for PosetOrphanChecker {
         if ty_local(&tref.self_ty, krate) && (
             self.privileged_self || tref.params.iter().all(
                 |p| ty_complete(p, krate))) {
-            debug!("{} is not an orphan by R1", tref);
+            debug!("{} is not a {}-orphan by R1", tref, krate);
             return true;
         }
 
@@ -68,9 +131,11 @@ impl OrphanChecker for PosetOrphanChecker {
         if ty_complete(&tref.self_ty, krate) &&
             tref.params.iter().all(|p| ty_complete(p, krate)) &&
             tref.params.iter().any(|p| ty_local(p, krate)) {
-                debug!("{} is not an orphan by R2", tref);
+                debug!("{} is not a {}-orphan by R2", tref, krate);
             return true;
         }
+
+        debug!("{} is a {}-orphan", tref, krate);
 
         false
     }
@@ -111,15 +176,16 @@ fn ty_local(t: &Ty, krate: CrateNum) -> bool {
         Generic(def, ref params) => {
             // T0
             if def.krate == krate {
-                debug!(" {} is local by T0", t);
+                debug!(" {} is {}-local by T0", t, krate);
                 return true;
             }
             // T1
             if params.iter().all(|p| ty_complete(p, krate)) &&
                 params.iter().any(|p| ty_local(p, krate)) {
-                    debug!(" {} is local by T1", t);
+                    debug!(" {} is {}-local by T1", t, krate);
                     return true;
             }
+            debug!(" {} is not {}-local", t, krate);
         }
     }
 

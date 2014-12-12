@@ -174,7 +174,6 @@ fn lone_type_parameter() {
     assert!(!ok(CORE_D, Param, vec![]));
 }
 
-
 #[test]
 fn type_parameter() {
     /*! `impl<T> Show for Foo<T>` -- OK */
@@ -235,12 +234,24 @@ fn blanket() {
 fn vec_local_1() {
     /*! `impl Clone for Vec<Foo>` -- OK */
 
-    assert!(ok(FOO_D, vec_(foo_p), vec![]));
+    assert!(ok(CORE_D, vec_(foo_p), vec![]));
 }
 
 #[test]
 fn vec_local_2() {
     /*! `impl<T> Clone for Vec<Foo<T>>` -- OK */
 
-    assert!(ok(FOO_D, vec_(foo_(Param)), vec![]));
+    assert!(ok(CORE_D, vec_(foo_(Param)), vec![]));
+}
+
+#[test]
+fn bigint_vecint() {
+    /*! `impl Add<Foo> for Vec<int>` -- OK */
+    assert!(ok(CORE_D, vec_(int_), vec![foo_p]));
+}
+
+#[test]
+fn all_remote() {
+    /*! `impl Clone for int` -- not OK */
+    assert!(!ok(CORE_D, int_, vec![]));
 }

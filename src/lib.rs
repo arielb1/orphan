@@ -107,6 +107,35 @@ trait OrphanChecker {
 /// crate  bar: struct Bar; impl<T> Base<Bar> for T {}
 ///
 /// and now, both impls are good for <Base<Bar> for Foo>.
+///
+/// One rule that prevents this, is to provide a substitution-consistent
+/// order on the definitions in a trait-ref, and require that a local
+/// type appears, and every type parameter appears before it.
+///
+/// This works: suppose that R_1 and R_2 are trait-refs (from unrelated
+/// crates), and their substitutions R_1[T_i=U_i] = R_2[T_i=V_i] = R
+/// are identical. Then, by the rule, each of R_1 and R_2 contain a local
+/// definition, which are also contained in the substitution R.
+/// Let these defintions be d_1 and d_2. Because they are local to
+/// different cases, these defintions are distinct, and because the crates
+/// are not related, d_2 isn't in R_1, and d_1 isn't in R_2, so they
+/// must have come from type parameters, which by the rule occur
+/// before the local types. Because the order is preserved by substitution,
+/// d_1 < d_2 and d_2 < d_1, a contradiction.
+///
+/// The most interesting total order is a variant of the lexical order, when
+/// <Base<Bar> for Foo> becomes <Base for Foo with Bar> or something equivalent.
+/// However, we don't want to use the total order directly, because it would
+/// mean that <Show for (Foo, T)> is allowed, while <Show for (T, Foo)>
+/// isn't, which feels too arbitrary. Instead, a sub-order is used,
+/// where the trait occurs before the self and arguments, and a type
+/// definition occurs before any of its arguments, but arguments aren't
+/// ordered between themselves.
+///
+/// It hasn't yet been decided whether Self should occur before the
+/// arguments, which would make it special, but it is required for
+/// impls like <Iterator<T> for Items<T>>. This is controlled by the
+/// privileged_self field.
 struct PosetOrphanChecker {
     privileged_self: bool
 }
